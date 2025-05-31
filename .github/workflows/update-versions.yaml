@@ -35,16 +35,19 @@ jobs:
       - name: Get EKS versions
         id: eks
         run: |
-          echo "EKS versions:"
-          aws eks describe-cluster-versions \
-            --query 'clusterVersions[?status==`STANDARD_SUPPORT`].clusterVersion' \
-            --output text | tr '\t' '\n' | sort | sed 's/^/eks-/'
+          echo "EKS Kubernetes versions:"
+          aws eks describe-addon-versions \
+            --query 'addons[?addonName==`vpc-cni`].addonVersions[].compatibilities[].clusterVersion' \
+            --output json | jq -r '.[] | select(. != null)' | sort -u -V | sed 's/^/eks-/'
 
       - name: Get AKS versions
         id: aks
         run: |
-          echo "AKS versions:"
-          az aks get-versions --location eastus --query "orchestrators[?orchestratorType=='Kubernetes' && !contains(orchestratorVersion, 'preview')].orchestratorVersion" --output tsv | sort -V | sed 's/^/aks-/'
+          echo "AKS Kubernetes versions:"
+          # Try different approach for AKS versions
+          az aks get-versions --location eastus --output json | \
+            jq -r '.orchestrators[] | select(.orchestratorType=="Kubernetes" and (.isPreview | not)) | .orchestratorVersion' | \
+            sort -V | sed 's/^/aks-/'
 
       # - name: Create and push tags
       #   uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
