@@ -38,15 +38,21 @@ jobs:
           echo "Latest EKS Kubernetes version:"
           aws eks describe-cluster-versions --output json | \
             jq -r '.clusterVersions[] | select(.status=="STANDARD_SUPPORT")' | \
-            jq -r '.clusterVersion' | sort -V | tail -1 | sed 's/^/eks-/'
+            jq -r '.kubernetesPatchVersion' | sort -V | tail -1 | sed 's/^/eks-/'
 
       - name: Get AKS versions
         id: aks
         run: |
           echo "Latest AKS Kubernetes version:"
-          az aks get-versions --location eastus --output json | \
+          # Get the latest major.minor version first
+          LATEST_VERSION=$(az aks get-versions --location eastus --output json | \
             jq -r '.values[] | select(.isPreview != true)' | \
-            jq -r '.version' | sort -V | tail -1 | sed 's/^/aks-/'
+            jq -r '.version' | sort -V | tail -1)
+          
+          # Get the latest patch version for that major.minor version
+          az aks get-versions --location eastus --output json | \
+            jq -r --arg VERSION "$LATEST_VERSION" '.values[] | select(.version==$VERSION) | .patchVersions | keys[]' | \
+            sort -V | tail -1 | sed 's/^/aks-/'
 
       # - name: Create and push tags
       #   uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
