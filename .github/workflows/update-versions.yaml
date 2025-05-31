@@ -36,21 +36,27 @@ jobs:
         id: eks
         run: |
           echo "EKS Kubernetes versions:"
-          # Fallback to describe-cluster-versions which requires fewer permissions
-          aws eks describe-cluster-versions \
-            --output json | jq -r '.clusterVersions[] | select(.status=="ACTIVE") | .version' | \
-            sort -V | sed 's/^/eks-/'
+          # Print raw output for debugging
+          echo "Raw EKS API output:"
+          aws eks describe-cluster-versions --output json > eks_output.json
+          cat eks_output.json
+          
+          # Process with minimal jq to find issues
+          echo "Processed EKS versions:"
+          cat eks_output.json | jq -r '.clusterVersions[].version' 2>/dev/null | sort -V | sed 's/^/eks-/' || echo "Error processing EKS JSON"
 
       - name: Get AKS versions
         id: aks
         run: |
           echo "AKS Kubernetes versions:"
-          # Exit with error if command fails
-          set -e
-          # Get full JSON and process with jq
-          az aks get-versions --location eastus --output json | jq . | \
-            jq -r '.orchestrators[] | select(.orchestratorType=="Kubernetes" and (.isPreview | not)) | .orchestratorVersion' | \
-            sort -V | sed 's/^/aks-/'
+          # Print raw output for debugging
+          echo "Raw AKS API output:"
+          az aks get-versions --location eastus --output json > aks_output.json
+          cat aks_output.json
+          
+          # Process with minimal jq to find issues
+          echo "Processed AKS versions:"
+          cat aks_output.json | jq -r '.orchestrators[].orchestratorVersion' 2>/dev/null | sort -V | sed 's/^/aks-/' || echo "Error processing AKS JSON"
 
       # - name: Create and push tags
       #   uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
