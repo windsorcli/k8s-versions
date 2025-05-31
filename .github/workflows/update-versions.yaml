@@ -36,16 +36,19 @@ jobs:
         id: eks
         run: |
           echo "EKS Kubernetes versions:"
-          aws eks describe-addon-versions \
-            --query 'addons[?addonName==`vpc-cni`].addonVersions[].compatibilities[].clusterVersion' \
-            --output json | jq -r '.[] | select(. != null)' | sort -u -V | sed 's/^/eks-/'
+          # Fallback to describe-cluster-versions which requires fewer permissions
+          aws eks describe-cluster-versions \
+            --output json | jq -r '.clusterVersions[] | select(.status=="ACTIVE") | .version' | \
+            sort -V | sed 's/^/eks-/'
 
       - name: Get AKS versions
         id: aks
         run: |
           echo "AKS Kubernetes versions:"
-          # Try different approach for AKS versions
-          az aks get-versions --location eastus --output json | \
+          # Exit with error if command fails
+          set -e
+          # Get full JSON and process with jq
+          az aks get-versions --location eastus --output json | jq . | \
             jq -r '.orchestrators[] | select(.orchestratorType=="Kubernetes" and (.isPreview | not)) | .orchestratorVersion' | \
             sort -V | sed 's/^/aks-/'
 
