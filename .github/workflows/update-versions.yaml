@@ -1,0 +1,76 @@
+name: Update Kubernetes Versions
+
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: '0 0 * * *'  # Run daily at midnight UTC
+  workflow_dispatch:  # Allow manual triggers
+
+jobs:
+  update-versions:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Get AKS versions
+        id: aks
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const response = await fetch('https://management.azure.com/providers/Microsoft.ContainerService/locations/eastus/orchestrators?api-version=2019-08-01');
+            const data = await response.json();
+            const versions = data.values
+              .map(v => v.version)
+              .filter(v => !v.includes('preview'))
+              .sort();
+            console.log('AKS versions:');
+            versions.forEach(v => console.log(`aks-${v}`));
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@b47578312673ae6fa5b5096b330d9fbac3d116df # v4.2.1
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-session-name: github-actions-${{ github.run_id }}
+
+      - name: Get EKS versions
+        id: eks
+        run: |
+          echo "EKS versions:"
+          aws eks describe-cluster-versions \
+            --query 'clusterVersions[?status==`STANDARD_SUPPORT`].clusterVersion' \
+            --output text | tr '\t' '\n' | sort | sed 's/^/eks-/'
+
+      # - name: Create and push tags
+      #   uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+      #   with:
+      #     script: |
+      #       const aksVersions = core.getInput('aks_versions').split('\n');
+      #       const eksVersions = core.getInput('eks_versions').split('\n');
+            
+      #       // Create AKS tags
+      #       for (const version of aksVersions) {
+      #         await github.rest.git.createRef({
+      #           owner: context.repo.owner,
+      #           repo: context.repo.repo,
+      #           ref: `refs/tags/aks-${version}`,
+      #           sha: context.sha,
+      #           force: true
+      #         });
+      #       }
+            
+      #       // Create EKS tags
+      #       for (const version of eksVersions) {
+      #         await github.rest.git.createRef({
+      #           owner: context.repo.owner,
+      #           repo: context.repo.repo,
+      #           ref: `refs/tags/eks-${version}`,
+      #           sha: context.sha,
+      #           force: true
+      #         });
+      #       } 
