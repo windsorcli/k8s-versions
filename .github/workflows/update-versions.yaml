@@ -36,9 +36,11 @@ jobs:
         id: eks
         run: |
           echo "Latest EKS Kubernetes version:"
-          aws eks describe-cluster-versions --output json | \
+          EKS_VERSION=$(aws eks describe-cluster-versions --output json | \
             jq -r '.clusterVersions[] | select(.status=="STANDARD_SUPPORT")' | \
-            jq -r '.kubernetesPatchVersion' | sort -V | tail -1 | sed 's/^/eks-/'
+            jq -r '.kubernetesPatchVersion' | sort -V | tail -1)
+          echo "eks-kubernetes-$EKS_VERSION"
+          echo "eks_version=$EKS_VERSION" >> $GITHUB_OUTPUT
 
       - name: Get AKS versions
         id: aks
@@ -50,35 +52,58 @@ jobs:
             jq -r '.version' | sort -V | tail -1)
           
           # Get the latest patch version for that major.minor version
-          az aks get-versions --location eastus --output json | \
+          AKS_VERSION=$(az aks get-versions --location eastus --output json | \
             jq -r --arg VERSION "$LATEST_VERSION" '.values[] | select(.version==$VERSION) | .patchVersions | keys[]' | \
-            sort -V | tail -1 | sed 's/^/aks-/'
+            sort -V | tail -1)
+          echo "aks-kubernetes-$AKS_VERSION"
+          echo "aks_version=$AKS_VERSION" >> $GITHUB_OUTPUT
 
-      # - name: Create and push tags
-      #   uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
-      #   with:
-      #     script: |
-      #       const aksVersions = core.getInput('aks_versions').split('\n');
-      #       const eksVersions = core.getInput('eks_versions').split('\n');
+      - name: Create and push tags
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const eksVersion = process.env.EKS_VERSION;
+            const aksVersion = process.env.AKS_VERSION;
             
-      #       // Create AKS tags
-      #       for (const version of aksVersions) {
-      #         await github.rest.git.createRef({
-      #           owner: context.repo.owner,
-      #           repo: context.repo.repo,
-      #           ref: `refs/tags/aks-${version}`,
-      #           sha: context.sha,
-      #           force: true
-      #         });
-      #       }
+            // Define tag names
+            const eksTagName = `eks-kubernetes-${eksVersion}`;
+            const aksTagName = `aks-kubernetes-${aksVersion}`;
             
-      #       // Create EKS tags
-      #       for (const version of eksVersions) {
-      #         await github.rest.git.createRef({
-      #           owner: context.repo.owner,
-      #           repo: context.repo.repo,
-      #           ref: `refs/tags/eks-${version}`,
-      #           sha: context.sha,
-      #           force: true
-      #         });
-      #       } 
+            // Get existing tags
+            const { data: existingTags } = await github.rest.git.listMatchingRefs({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: 'tags/'
+            });
+            
+            const existingTagNames = existingTags.map(tag => tag.ref.replace('refs/tags/', ''));
+            console.log('Existing tags:', existingTagNames);
+            
+            // Check and create EKS tag if it doesn't exist
+            if (!existingTagNames.includes(eksTagName)) {
+              console.log(`Creating new tag: ${eksTagName}`);
+              await github.rest.git.createRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: `refs/tags/${eksTagName}`,
+                sha: context.sha
+              });
+            } else {
+              console.log(`Tag ${eksTagName} already exists, skipping`);
+            }
+            
+            // Check and create AKS tag if it doesn't exist
+            if (!existingTagNames.includes(aksTagName)) {
+              console.log(`Creating new tag: ${aksTagName}`);
+              await github.rest.git.createRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: `refs/tags/${aksTagName}`,
+                sha: context.sha
+              });
+            } else {
+              console.log(`Tag ${aksTagName} already exists, skipping`);
+            }
+        env:
+          EKS_VERSION: ${{ steps.eks.outputs.eks_version }}
+          AKS_VERSION: ${{ steps.aks.outputs.aks_version }} 
