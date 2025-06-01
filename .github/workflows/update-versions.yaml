@@ -1,0 +1,170 @@
+name: Update Kubernetes Versions
+
+on:
+  pull_request:
+    branches:
+      - main
+  schedule:
+    - cron: '0 0 * * *'  # Run daily at midnight UTC
+  workflow_dispatch:  # Allow manual triggers
+
+jobs:
+  update-versions:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@b47578312673ae6fa5b5096b330d9fbac3d116df # v4.2.1
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-session-name: github-actions-${{ github.run_id }}
+
+      - name: Configure Azure Credentials
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Get EKS versions
+        id: eks
+        run: |
+          echo "Latest EKS Kubernetes versions:"
+          
+          # Get standard version
+          EKS_STD_VERSION=$(aws eks describe-cluster-versions --output json | \
+            jq -r '.clusterVersions[] | select(.status=="STANDARD_SUPPORT") | .kubernetesVersion' | \
+            sort -V | tail -1)
+          
+          # Get preview version
+          EKS_PREVIEW_VERSION=$(aws eks describe-cluster-versions --output json | \
+            jq -r '.clusterVersions[] | select(.status=="PREVIEW") | .kubernetesVersion' | \
+            sort -V | tail -1)
+          
+          if [ -z "$EKS_STD_VERSION" ]; then
+            echo "Error: Failed to get EKS standard version"
+            exit 1
+          fi
+          
+          echo "eks-kubernetes-$EKS_STD_VERSION"
+          echo "eks-kubernetes-$EKS_PREVIEW_VERSION-preview"
+          echo "eks_std_version=$EKS_STD_VERSION" >> $GITHUB_OUTPUT
+          echo "eks_preview_version=$EKS_PREVIEW_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Get AKS versions
+        id: aks
+        run: |
+          echo "Latest AKS Kubernetes versions:"
+          
+          # Get standard version
+          AKS_STD_VERSION=$(az aks get-versions --location eastus --output json | \
+            jq -r '.values[] | select(.isPreview != true) | .version' | \
+            sort -V | tail -1)
+          
+          # Get preview version
+          AKS_PREVIEW_VERSION=$(az aks get-versions --location eastus --output json | \
+            jq -r '.values[] | select(.isPreview == true) | .version' | \
+            sort -V | tail -1)
+          
+          if [ -z "$AKS_STD_VERSION" ]; then
+            echo "Error: Failed to get AKS standard version"
+            exit 1
+          fi
+          
+          echo "aks-kubernetes-$AKS_STD_VERSION"
+          echo "aks-kubernetes-$AKS_PREVIEW_VERSION-preview"
+          echo "aks_std_version=$AKS_STD_VERSION" >> $GITHUB_OUTPUT
+          echo "aks_preview_version=$AKS_PREVIEW_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create and push tags
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const eksStdVersion = process.env.EKS_STD_VERSION;
+            const eksPreviewVersion = process.env.EKS_PREVIEW_VERSION;
+            const aksStdVersion = process.env.AKS_STD_VERSION;
+            const aksPreviewVersion = process.env.AKS_PREVIEW_VERSION;
+            
+            if (!eksStdVersion || !aksStdVersion) {
+              core.setFailed('Missing standard version information');
+              return;
+            }
+            
+            // Define tag names
+            const eksStdTagName = `eks-kubernetes-${eksStdVersion}`;
+            const eksPreviewTagName = eksPreviewVersion ? `eks-kubernetes-${eksPreviewVersion}-preview` : null;
+            const aksStdTagName = `aks-kubernetes-${aksStdVersion}`;
+            const aksPreviewTagName = aksPreviewVersion ? `aks-kubernetes-${aksPreviewVersion}-preview` : null;
+            
+            // Get existing tags
+            const { data: existingTags } = await github.rest.git.listMatchingRefs({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: 'tags/'
+            });
+            
+            const existingTagNames = existingTags.map(tag => tag.ref.replace('refs/tags/', ''));
+            console.log('Existing tags:', existingTagNames);
+            
+            // Check and create EKS standard tag
+            if (!existingTagNames.includes(eksStdTagName)) {
+              console.log(`Creating new tag: ${eksStdTagName}`);
+              await github.rest.git.createRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: `refs/tags/${eksStdTagName}`,
+                sha: context.sha
+              });
+            } else {
+              console.log(`Tag ${eksStdTagName} already exists, skipping`);
+            }
+            
+            // Check and create EKS preview tag if available
+            if (eksPreviewTagName && !existingTagNames.includes(eksPreviewTagName)) {
+              console.log(`Creating new tag: ${eksPreviewTagName}`);
+              await github.rest.git.createRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: `refs/tags/${eksPreviewTagName}`,
+                sha: context.sha
+              });
+            } else if (eksPreviewTagName) {
+              console.log(`Tag ${eksPreviewTagName} already exists, skipping`);
+            }
+            
+            // Check and create AKS standard tag
+            if (!existingTagNames.includes(aksStdTagName)) {
+              console.log(`Creating new tag: ${aksStdTagName}`);
+              await github.rest.git.createRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: `refs/tags/${aksStdTagName}`,
+                sha: context.sha
+              });
+            } else {
+              console.log(`Tag ${aksStdTagName} already exists, skipping`);
+            }
+            
+            // Check and create AKS preview tag if available
+            if (aksPreviewTagName && !existingTagNames.includes(aksPreviewTagName)) {
+              console.log(`Creating new tag: ${aksPreviewTagName}`);
+              await github.rest.git.createRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: `refs/tags/${aksPreviewTagName}`,
+                sha: context.sha
+              });
+            } else if (aksPreviewTagName) {
+              console.log(`Tag ${aksPreviewTagName} already exists, skipping`);
+            }
+        env:
+          EKS_STD_VERSION: ${{ steps.eks.outputs.eks_std_version }}
+          EKS_PREVIEW_VERSION: ${{ steps.eks.outputs.eks_preview_version }}
+          AKS_STD_VERSION: ${{ steps.aks.outputs.aks_std_version }}
+          AKS_PREVIEW_VERSION: ${{ steps.aks.outputs.aks_preview_version }} 
